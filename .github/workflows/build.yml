@@ -1,0 +1,24 @@
+name: Build Kivy APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装系统依赖
+        run: |
+          sudo apt update
+          sudo apt install -y git zip unzip openjdk-8-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+      - name: 安装buildozer
+        run: |
+          pip3 install --upgrade Cython==0.29.19 virtualenv buildozer
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: 开始打包APK
+        run: |
+          buildozer -v android debug
+      - name: 上传APK成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: 英语单词APP
+          path: bin/*.apk
