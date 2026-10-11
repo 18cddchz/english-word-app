@@ -18,7 +18,7 @@ android.add_assets = DroidSansFallback.ttf
 android.permissions = INTERNET,RECORD_AUDIO
 android.api = 33
 android.ndk = 25b
-android.sdk = 24
+android.sdk = 33
 android.archs = arm64-v8a
 
 # 应用界面
