@@ -1,22 +1,38 @@
 name: Build Kivy APK
+
 on:
-  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      # ===== 新增：安装编译所需系统依赖，解决 LT_SYS_SYMBOL_USCORE 报错 =====
+      - name: Install host build dependencies
         run: |
-          sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libreadline6-dev libssl-dev libsqlite3-dev libbz2-dev libffi-dev
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+          autoconf automake libtool libtool-bin pkg-config build-essential \
+          libssl-dev libbz2-dev libreadline-dev libsqlite3-dev
 
-      - name: Install buildozer
-        run: |
-          pip3 install buildozer
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Build APK
-        run: |
-          echo y | buildozer android debug
+      - name: Install Buildozer
+        run: pip install buildozer
+
+      - name: Build Android APK
+        run: buildozer android debug
+
+      # 打包成功后，上传APK作为成品文件
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: bin/*.apk
