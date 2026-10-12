@@ -18,23 +18,26 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev python3-pip python3-venv openjdk-17-jdk
+        sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev python3-pip python3-venv openjdk-17-jdk wget unzip
 
     - name: Install buildozer
       run: |
         pip install --upgrade pip
         pip install buildozer
 
-    - name: Pre-fetch SDK (只下载SDK框架，不安装build-tools)
+    - name: Download Android Command Line Tools
       run: |
-        buildozer android sdk --no-build-tools
-
-    - name: Accept all SDK licenses
-      run: |
-        export ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk
+        mkdir -p $HOME/android-sdk/cmdline-tools
+        wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmd.zip
+        unzip cmd.zip -d $HOME/android-sdk/cmdline-tools
+        mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+        export ANDROID_SDK_ROOT=$HOME/android-sdk
         yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+        $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0" "platforms;android-33"
 
     - name: Build APK
+      env:
+        ANDROID_SDK_ROOT: $HOME/android-sdk
       run: |
         buildozer android debug
       
