@@ -2,11 +2,15 @@
 package.name = englishstudy
 package.domain = org.english.learn
 
+# 加上版本号！
+version = 0.1
+version.regex = ^(?P<version>[0-9.]+)$
+version.filename = %(source.dir)s/main.py;
+
 source.dir = .
 source.include_exts = py,png,jpg,ttf,json
 source.exclude_dirs = tests, bin, .git
 
-# 重点修改：只保留64位，去掉armeabi-v7a！！
 android.api = 33
 android.ndk = 25b
 android.sdk = 24
@@ -24,3 +28,4 @@ p4a.local_recipes =
 [buildozer]
 log_level = 2
 warn_on_root = 1
+
