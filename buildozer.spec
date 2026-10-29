@@ -1,5 +1,5 @@
 [app]
-
+tite=英语学习
 # 包名，不要中文
 package.name = englishstudy
 package.domain = org.englishstudy
