@@ -4,7 +4,7 @@ package.domain = org.english.learn
 
 # 加上版本号！
 version = 0.1
-version.regex = ^(?P<version>[0-9.]+)$
+#version.regex = ^(?P<version>[0-9.]+)$
 version.filename = %(source.dir)s/main.py;
 
 source.dir = .
