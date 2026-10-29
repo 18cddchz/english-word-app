@@ -3,6 +3,8 @@
 # 包名，不要中文、空格
 package.name = englishstudy
 package.domain = org.englishstudy
+# 新增应用标题（这里写APP显示的名字，平板桌面会看到）
+title = 小学英语学习助手
 
 # 版本号
 version = 1.0
