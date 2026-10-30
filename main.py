@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -12,10 +13,10 @@ from kivy.core.text import LabelBase
 from kivy.graphics import Color, Rectangle
 from kivy.utils import platform
 from kivy.uix.popup import Popup
+from kivy.clock import Clock, mainthread
 import json
 import random
 import os
-import time
 # ===================== 界面配色 =====================
 BG_COLOR = [1, 0.97, 0.86, 1]
 TEXT_COLOR = [0, 0, 0, 1]
@@ -26,7 +27,7 @@ RED_CN = "#dd0000"  # 中文释义红色
 # 全局字号基准，运行可按钮动态加减
 BASE_FONT = 40
 FONT_BUTTON = 48   # 按钮文字固定48
-# ========== 字体：内置/根目录多级回退，保证打包后中文正常 ==========
+# ========== 字体：内置/脚本同目录/根目录多级回退，保证打包后中文正常 ==========
 def _pick_font():
     # 1) APK 内置字体（buildozer 已把 ttf 打进去）
     try:
@@ -36,7 +37,14 @@ def _pick_font():
             return _f
     except Exception:
         pass
-    # 2) 手机/平板根目录旧路径（Pydroid3 调试时用）
+    # 2) 脚本同目录（本地调试 / 打包源码目录）
+    try:
+        _local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DroidSansFallback.ttf")
+        if os.path.exists(_local):
+            return _local
+    except Exception:
+        pass
+    # 3) 手机/平板根目录旧路径（Pydroid3 调试时用）
     if os.path.exists("/storage/emulated/0/DroidSansFallback.ttf"):
         return "/storage/emulated/0/DroidSansFallback.ttf"
     return None
@@ -51,6 +59,7 @@ except Exception as e:
     print("字体加载失败，使用系统默认字体", e)
     FONT_NAME = None
 # ========= 安卓TTS语音模块（美式en‑US） =========
+# 修复4：移除所有主线程 time.sleep 阻塞，改为异步就绪检测 + mainthread 调度
 _tts_engine = None          # jnius 引擎实例（退出时 shutdown 用）
 _tts_ready = False          # 引擎异步初始化是否完成
 _tts_cls = None
@@ -72,17 +81,14 @@ if platform == "android":
             @java_method("(I)V")
             def onInit(self, status):
                 self._holder["ready"] = (status == 0)
+                global _tts_ready
+                _tts_ready = (status == 0)
 
         _activity = _PythonActivity.mActivity
         _tts_engine = _TTS(_activity, _OnInitListener(_holder))
         _tts_engine.setLanguage(_Locale.US)
         _tts_cls = _TTS
-        # 引擎异步初始化，首次最多等待约 1.5 秒
-        for _ in range(30):
-            if _holder["ready"]:
-                break
-            time.sleep(0.05)
-        _tts_ready = _holder["ready"]
+        # 修复4：不再主线程 sleep 等待，异步就绪由 onInit 回调更新
     except Exception as e:
         print("jnius TTS 初始化失败，转 plyer 兜底:", e)
         _tts_engine = None
@@ -100,25 +106,27 @@ tts = _tts_engine
 TextToSpeech = _tts_cls
 Locale = None
 
+@mainthread
+def _jnius_speak(text, speed):
+    """在主线程上调用安卓原生 TTS，避免线程问题"""
+    try:
+        _tts_engine.setSpeechRate(float(speed))
+        _tts_engine.speak(text, _tts_cls.QUEUE_FLUSH, None, None)
+    except Exception as e:
+        print("jnius speak 调度失败:", e)
+
 def speak_en(text, speed=1.0):
     clean_text = (text or "").replace("\n", " ").strip()
     if not clean_text:
         return False
     # 1) 优先 jnius 直连安卓原生引擎
     if platform == "android" and _tts_engine is not None and _tts_cls is not None:
-        try:
-            if not _tts_ready:
-                for _ in range(20):
-                    if _holder["ready"]:
-                        _tts_ready = True
-                        break
-                    time.sleep(0.05)
-            if _tts_ready:
-                _tts_engine.setSpeechRate(float(speed))
-                _tts_engine.speak(clean_text, _tts_cls.QUEUE_FLUSH, None)
-                return True
-        except Exception as e:
-            print("jnius 朗读失败:", e)
+        # 修复4：不再 busy-wait sleep；若尚未就绪则等下一次调用
+        if _holder["ready"]:
+            _jnius_speak(clean_text, speed)
+            return True
+        else:
+            return False
     # 2) plyer 兜底
     if _plyer_tts is not None:
         try:
@@ -126,6 +134,15 @@ def speak_en(text, speed=1.0):
             return True
         except Exception as e:
             print("plyer TTS 朗读失败:", e)
+    return False
+
+# 修复3：通过英文文本比对判断条目是否已存在，解决 JsonStore 序列化后 dict 对象地址不同导致重复写入
+def item_exists(item, item_list):
+    """en 字段去空格转小写后比对，避免 dict 对象内存地址不同造成重复"""
+    en_text = (item.get("en", "") or "").strip().lower()
+    for x in item_list:
+        if (x.get("en", "") or "").strip().lower() == en_text:
+            return True
     return False
 # ===================== 人教PEP三起课本词库（带音标、课本例句、知识点） =====================
 word_data = {
@@ -469,7 +486,7 @@ class WordScreen(Screen):
         self.result_label = Label(text="", font_name=FONT_NAME, font_size=BASE_FONT*0.85, size_hint_y=0.10, markup=True)
         layout.add_widget(self.result_label)
 
-        # --- 把输入框移到下方，和按钮接平，放到所有按钮前面 ---
+        # --- 第一排按钮 ---
         btn_layout = GridLayout(cols=4, size_hint_y=0.095, spacing=4)
         btn_read = Button(text="朗读", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_submit = Button(text="提交答案", font_name=FONT_NAME, font_size=FONT_BUTTON)
@@ -485,24 +502,27 @@ class WordScreen(Screen):
         btn_layout.add_widget(btn_master)
         layout.add_widget(btn_layout)
 
+        # --- 第二排按钮 ---
         btn_layout2 = GridLayout(cols=5, size_hint_y=0.095, spacing=4)
         btn_trans_e2c = Button(text="英译汉", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_trans_c2e = Button(text="汉译英", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_fav = Button(text="收藏", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_speed_slow = Button(text="语速切换", font_name=FONT_NAME, font_size=FONT_BUTTON)
-        btn_rand_order = Button(text="随机/顺序", font_name=FONT_NAME, font_size=FONT_BUTTON)
+        # 修复10：保存按钮引用，便于在 load_grade 时同步文字
+        self.btn_rand_order = Button(text="随机", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_trans_e2c.bind(on_press=lambda x:self.set_mode("e2c"))
         btn_trans_c2e.bind(on_press=lambda x:self.set_mode("c2e"))
         btn_fav.bind(on_press=self.add_fav)
         btn_speed_slow.bind(on_press=self.toggle_speed)
-        btn_rand_order.bind(on_press=self.toggle_random)
+        self.btn_rand_order.bind(on_press=self.toggle_random)
         btn_layout2.add_widget(btn_trans_e2c)
         btn_layout2.add_widget(btn_trans_c2e)
         btn_layout2.add_widget(btn_fav)
         btn_layout2.add_widget(btn_speed_slow)
-        btn_layout2.add_widget(btn_rand_order)
+        btn_layout2.add_widget(self.btn_rand_order)
         layout.add_widget(btn_layout2)
 
+        # --- 第三排遮罩/听写按钮 ---
         btn_layout3 = GridLayout(cols=4, size_hint_y=0.09, spacing=4)
         btn_mask0 = Button(text="全部显示", font_name=FONT_NAME, font_size=FONT_BUTTON)
         btn_mask1 = Button(text="遮英文", font_name=FONT_NAME, font_size=FONT_BUTTON)
@@ -518,8 +538,8 @@ class WordScreen(Screen):
         btn_layout3.add_widget(btn_dictation)
         layout.add_widget(btn_layout3)
 
-        #输入答案框移到此，和按钮接平
-        self.answer_input = TextInput(hint_text="在这里输入答案", font_name=FONT_NAME, font_size=BASE_FONT*0.8, size_hint_y=0.09, multiline=True)
+        #修复5：答题输入框改为单行 multiline=False
+        self.answer_input = TextInput(hint_text="在这里输入答案", font_name=FONT_NAME, font_size=BASE_FONT*0.8, size_hint_y=0.09, multiline=False)
         layout.add_widget(self.answer_input)
 
         btn_back = Button(text="返回主页", font_name=FONT_NAME, font_size=FONT_BUTTON, size_hint_y=0.065)
@@ -553,20 +573,38 @@ class WordScreen(Screen):
         self.item_type = item_type
         self.auto_speak_next = False
         if item_type == "word":
-            self.item_list = word_data[grade]["words"]
+            raw_list = word_data[grade]["words"]
         elif item_type == "sentence":
-            self.item_list = word_data[grade]["sentences"] + word_data[grade]["articles"]
+            raw_list = word_data[grade]["sentences"] + word_data[grade]["articles"]
+        else:
+            raw_list = []
+        # 修复7：加载题目时自动过滤【已掌握】条目，学过的不再出现
+        mastered_en_set = set()
+        if store.exists("mastered"):
+            for m in store.get("mastered")["items"]:
+                mastered_en_set.add((m.get("en","") or "").strip().lower())
+        self.item_list = [it for it in raw_list if (it.get("en","") or "").strip().lower() not in mastered_en_set]
         if self.random_mode:
             random.shuffle(self.item_list)
+        # 修复10：同步随机/顺序按钮文字
+        self.btn_rand_order.text = "随机" if self.random_mode else "顺序"
         self.next_item(None)
     def load_wrong_only(self):
         self.is_wrong_only=True
-        self.item_list=[]
         self.auto_speak_next = False
+        self.item_list=[]
         if store.exists("wrong"):
-            self.item_list = store.get("wrong")["items"]
+            raw_wrong = store.get("wrong")["items"]
+            # 修复7：错题专项也过滤已掌握
+            mastered_en_set = set()
+            if store.exists("mastered"):
+                for m in store.get("mastered")["items"]:
+                    mastered_en_set.add((m.get("en","") or "").strip().lower())
+            self.item_list = [it for it in raw_wrong if (it.get("en","") or "").strip().lower() not in mastered_en_set]
         if self.random_mode:
             random.shuffle(self.item_list)
+        # 修复10：同步按钮文字
+        self.btn_rand_order.text = "随机" if self.random_mode else "顺序"
         self.next_item(None)
     def set_mode(self, mode):
         self.mode = mode
@@ -577,10 +615,13 @@ class WordScreen(Screen):
         if not store.exists("mastered"):
             store.put("mastered",items=[])
         mlist = store.get("mastered")["items"]
-        if self.current_item not in mlist:
+        # 修复3：用 item_exists 英文文本比对，不再用 dict 对象地址比对
+        if not item_exists(self.current_item, mlist):
             mlist.append(self.current_item)
             store.put("mastered",items=mlist)
             self.result_label.text="[color=#00aa00]已标记为掌握[/color]"
+        else:
+            self.result_label.text="[color=#00aa00]该条目已在掌握列表中[/color]"
     def next_item(self, instance):
         if len(self.item_list) <= 0:
             self.question_label.text = "[color=#000000]本部分练习完成！[/color]"
@@ -622,32 +663,34 @@ class WordScreen(Screen):
                 else:
                     disp_cn=f"[color={RED_CN}]{raw_cn}[/color]"
                 self.question_label.text = disp_cn
-        # 如果之前点过朗读，下一题自动朗读
+        # 修复8：如果之前点过朗读，下一题自动朗读（用 Clock 延迟调度，不阻塞主线程）
         if self.auto_speak_next:
-            self.read_aloud(None)
+            Clock.schedule_once(lambda dt: self.read_aloud(None), 0.15)
     def check_answer(self, instance):
         if self.current_item is None:
             return
-        user_ans = self.answer_input.text.strip()
+        # 修复6：用户答案和正确答案都 strip() 去空格，再 lower() 忽略大小写
+        user_ans = self.answer_input.text.strip().lower()
         if self.mode == "e2c":
-            right_ans = self.current_item["cn"]
+            right_ans = self.current_item["cn"].strip().lower()
         else:
-            right_ans = self.current_item["en"]
+            right_ans = self.current_item["en"].strip().lower()
         if not store.exists("stat"):
             store.put("stat", total=0, right=0)
         stat = store.get("stat")
         stat["total"] += 1
-        if user_ans.lower() == right_ans.lower():
-            self.result_label.text = f"[color=#00aa00]回答正确！[/color] [color={RED_CN}]{right_ans}[/color]"
+        if user_ans == right_ans:
+            self.result_label.text = f"[color=#00aa00]回答正确！[/color] [color={RED_CN}]{self.current_item['cn']}[/color]"
             stat["right"] +=1
         else:
             self.result_label.text = f"[color=#dd0000]答案错误！[/color] 正确：[color={RED_CN}]{right_ans}[/color]"
             if not store.exists("wrong"):
                 store.put("wrong", items=[])
             wrong_list = store.get("wrong")["items"]
-            if self.current_item not in wrong_list:
+            # 修复3：用 item_exists 英文文本比对去重
+            if not item_exists(self.current_item, wrong_list):
                 wrong_list.append(self.current_item)
-            store.put("wrong", items=wrong_list)
+                store.put("wrong", items=wrong_list)
         store.put("stat", total=stat["total"], right=stat["right"])
     def read_aloud(self, instance):
         if self.current_item is None:
@@ -664,10 +707,13 @@ class WordScreen(Screen):
         if not store.exists("fav"):
             store.put("fav", items=[])
         fav_list = store.get("fav")["items"]
-        if self.current_item not in fav_list:
+        # 修复3：用 item_exists 英文文本比对去重
+        if not item_exists(self.current_item, fav_list):
             fav_list.append(self.current_item)
             store.put("fav", items=fav_list)
             self.result_label.text = "[color=#ddaa00]已收藏！[/color]"
+        else:
+            self.result_label.text = "[color=#ddaa00]该条目已在收藏列表中[/color]"
 class FavScreen(Screen):
     def __init__(self,**kwargs):
         super().__init__(**kwargs)
@@ -706,11 +752,15 @@ class FavScreen(Screen):
                 note = it.get("note","无注解")
                 ph = it.get("phonetic","")
                 txt_out += f"{it['en']} {ph}｜{it['cn']} 【知识点：{note}】\n"
+        # 修复9：弹窗内容用 ScrollView 包裹，长文本可上下滑动
         box=BoxLayout(orientation="vertical",padding=10,spacing=8)
-        lab=Label(text=txt_out if txt_out else "暂无收藏",font_name=FONT_NAME,font_size=BASE_FONT*0.65)
-        btn_close=Button(text="关闭",size_hint_y=0.14,font_name=FONT_NAME,font_size=FONT_BUTTON)
+        scroll_inner=ScrollView()
+        lab=Label(text=txt_out if txt_out else "暂无收藏",font_name=FONT_NAME,font_size=BASE_FONT*0.65,size_hint_y=None)
+        lab.bind(texture_size=lab.setter("size"))
+        scroll_inner.add_widget(lab)
+        btn_close=Button(text="关闭",size_hint_y=0.12,font_name=FONT_NAME,font_size=FONT_BUTTON)
         btn_close.bind(on_press=lambda x:self.export_popup.dismiss())
-        box.add_widget(lab)
+        box.add_widget(scroll_inner)
         box.add_widget(btn_close)
         self.export_popup=Popup(title="收藏文本预览",content=box,size_hint=(0.92,0.8))
         self.export_popup.open()
@@ -774,11 +824,15 @@ class WrongScreen(Screen):
                 note = it.get("note","无注解")
                 ph = it.get("phonetic","")
                 txt_out += f"{it['en']} {ph}｜{it['cn']} 【知识点：{note}】\n"
+        # 修复9：弹窗内容用 ScrollView 包裹，长文本可上下滑动
         box=BoxLayout(orientation="vertical",padding=10,spacing=8)
-        lab=Label(text=txt_out if txt_out else "暂无错题",font_name=FONT_NAME,font_size=BASE_FONT*0.65)
-        btn_close=Button(text="关闭",size_hint_y=0.14,font_name=FONT_NAME,font_size=FONT_BUTTON)
+        scroll_inner=ScrollView()
+        lab=Label(text=txt_out if txt_out else "暂无错题",font_name=FONT_NAME,font_size=BASE_FONT*0.65,size_hint_y=None)
+        lab.bind(texture_size=lab.setter("size"))
+        scroll_inner.add_widget(lab)
+        btn_close=Button(text="关闭",size_hint_y=0.12,font_name=FONT_NAME,font_size=FONT_BUTTON)
         btn_close.bind(on_press=lambda x:self.popup_wrong.dismiss())
-        box.add_widget(lab)
+        box.add_widget(scroll_inner)
         box.add_widget(btn_close)
         self.popup_wrong=Popup(title="错题文本预览",content=box,size_hint=(0.92,0.8))
         self.popup_wrong.open()
@@ -873,4 +927,4 @@ class EnglishStudyApp(App):
             except Exception:
                 pass
 if __name__ == "__main__":
-     EnglishStudyApp().run()
+    EnglishStudyApp().run()
