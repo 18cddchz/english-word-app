@@ -10,7 +10,7 @@ source.exclude_dirs = tests, bin, venv, .git
 version = 0.1
 
 requirements = python3,kivy==2.2.1,plyer,charset_normalizer==2.0.4
-python = 3.10
+python_version = 3.11
 
 android.archs = arm64-v8a
 
