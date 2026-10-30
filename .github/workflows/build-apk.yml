@@ -11,6 +11,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install system dependencies
         run: |
           sudo apt update
@@ -18,17 +23,16 @@ jobs:
 
       - name: Install buildozer
         run: |
-          pip3 install --upgrade pip
-          pip3 install buildozer
+          pip install --upgrade pip
+          pip install buildozer
+          export PATH=$PATH:$HOME/.local/bin
 
       - name: Build APK
-        run: |
-          export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
-          export ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk
-          buildozer android debug
+        run: buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: englishstudy-apk
+          name: english-app-apk
           path: bin/*.apk
+
